@@ -38,10 +38,20 @@ pub use self::addr::{SockaddrLike, SockaddrStorage};
 pub use self::addr::{AddressFamily, UnixAddr};
 #[cfg(not(solarish))]
 pub use self::addr::{AddressFamily, UnixAddr};
-#[cfg(not(any(solarish, target_os = "haiku", target_os = "hurd", target_os = "redox")))]
+#[cfg(not(any(
+    solarish,
+    target_os = "haiku",
+    target_os = "hurd",
+    target_os = "redox"
+)))]
 #[cfg(feature = "net")]
 pub use self::addr::{LinkAddr, SockaddrIn, SockaddrIn6};
-#[cfg(any(solarish, target_os = "haiku", target_os = "hurd", target_os = "redox"))]
+#[cfg(any(
+    solarish,
+    target_os = "haiku",
+    target_os = "hurd",
+    target_os = "redox"
+))]
 #[cfg(feature = "net")]
 pub use self::addr::{SockaddrIn, SockaddrIn6};
 
@@ -2296,3 +2306,89 @@ pub fn shutdown(df: RawFd, how: Shutdown) -> Result<()> {
     }
 }
 
+#[derive(Debug)]
+pub struct CmsgEncoder<'a> {
+    cmsgs: Vec<ControlMessage<'a>>,
+}
+
+impl<'a> CmsgEncoder<'a> {
+    pub fn new() -> Self {
+        CmsgEncoder { cmsgs: Vec::new() }
+    }
+
+    pub fn push(&mut self, cmsg: ControlMessage<'a>) -> &mut Self {
+        self.cmsgs.push(cmsg);
+        self
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        // Compute the lenghts of all cmsgs to initialize an empty buffer
+        let buff_capacity: usize =
+            self.cmsgs.iter().map(|cmsg| cmsg.space()).sum();
+        let mut buffer = vec![0_u8; buff_capacity];
+
+        // Original implementation
+        // Calculate the maximum address, based on the start address of the `msg_control`
+        // buffer + the specified buffer length
+        // We use the pointer to the (exclusive) end of our buffer
+        let buffer_start = buffer.as_mut_ptr();
+        let buffer_end = buffer.as_ptr_range().end as usize;
+        assert!(buffer_end - buffer_start as usize > mem::size_of::<cmsghdr>());
+
+        #[allow(clippy::cast_ptr_alignment)]
+        let mut cmsg_hdr: *mut cmsghdr = buffer_start as *mut cmsghdr;
+        for cmsg in self.cmsgs.iter().as_ref() {
+            // Check if the buffer has sufficient size left for the next cmsghdr
+            assert!(buffer_end - cmsg_hdr as usize > mem::size_of::<cmsghdr>());
+
+            // SAFETY: cmsg_hdr pointer is valid, by assertion above
+            unsafe { cmsg.encode_into(cmsg_hdr) }
+
+            // Check if the passed cmsg header is valid
+            // Specified length of must be at least the minimum header size
+            let cmsg_len = unsafe { (*cmsg_hdr).cmsg_len as usize };
+            assert!(cmsg_len >= mem::size_of::<cmsghdr>());
+
+            // Allign the pointer to the expected size
+            // This works with the cmsg_len since its the start of the cmsg
+            let current_align = (cmsg_len + mem::size_of::<usize>() - 1)
+                & !(mem::size_of::<usize>() - 1);
+
+            // Get the start pointer for the next cmsghdr in the buffer
+            // Add the lenght + alignment to the current cmsg buffer start
+            let next_start =
+                (cmsg_hdr as usize + current_align) as *mut cmsghdr;
+
+            // End pointer address of the next cmsghdr slot
+            let next_end = unsafe { next_start.offset(1) };
+
+            // The lenght of the cmsghdr we want to add
+            let next_len = cmsg.cmsg_len();
+            // Align the pointer of the to be added cmsghdr
+            let next_align = (next_len + mem::size_of::<usize>() - 1)
+                & !(mem::size_of::<usize>() - 1);
+            // End address of the aligned to be added cmsghdr
+            let next_end_aligned = next_start as usize + next_align;
+
+            assert!(
+                (next_end as usize) < buffer_end
+                    && next_end_aligned < buffer_end
+            );
+
+            cmsg_hdr = next_len as *mut cmsghdr;
+        }
+
+        // Add assertion if calculated end pointer address == end address of Vec
+        // to ensure we have the correct buffer size and written all data
+        let bytes_written = cmsg_hdr as usize - buffer.as_ptr() as usize;
+        assert_eq!(bytes_written, buff_capacity);
+
+        buffer
+    }
+}
+
+impl Default for CmsgEncoder<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
