@@ -2341,6 +2341,28 @@ impl<'a> CmsgEncoder<'a> {
             // Check if the buffer has sufficient size left for the next cmsghdr
             assert!(buffer_end - cmsg_hdr as usize > mem::size_of::<cmsghdr>());
 
+            // End pointer address of the cmsghdr slot
+            let next_end = unsafe { cmsg_hdr.offset(1) };
+
+            // The lenght of the cmsghdr we want to add
+            let next_len = cmsg.cmsg_len();
+            // Align the pointer of the to be added cmsghdr
+            let next_align = (next_len + mem::size_of::<usize>() - 1)
+                & !(mem::size_of::<usize>() - 1);
+            // End address of the aligned to be added cmsghdr
+            let next_end_aligned = cmsg_hdr as usize + next_align;
+
+            assert!((next_end as usize) <= buffer_end, 
+                "Cmsghdr end must be before buffer end. Cmsghdr end was {}, buffer end was {}",
+                next_end as usize, 
+                buffer_end
+            );
+            assert!(next_end_aligned <= buffer_end, 
+                "Aligned cmsghdr end must be before buffer end. Cmsghdr end was {}, buffer end was {}", 
+                next_end_aligned, 
+                buffer_end
+            );
+
             // SAFETY: cmsg_hdr pointer is valid, by assertion above
             unsafe { cmsg.encode_into(cmsg_hdr) }
 
@@ -2349,7 +2371,7 @@ impl<'a> CmsgEncoder<'a> {
             let cmsg_len = unsafe { (*cmsg_hdr).cmsg_len as usize };
             assert!(cmsg_len >= mem::size_of::<cmsghdr>());
 
-            // Allign the pointer to the expected size
+            // Align the pointer to the expected size
             // This works with the cmsg_len since its the start of the cmsg
             let current_align = (cmsg_len + mem::size_of::<usize>() - 1)
                 & !(mem::size_of::<usize>() - 1);
@@ -2359,29 +2381,7 @@ impl<'a> CmsgEncoder<'a> {
             let next_start =
                 (cmsg_hdr as usize + current_align) as *mut cmsghdr;
 
-            // End pointer address of the next cmsghdr slot
-            let next_end = unsafe { next_start.offset(1) };
-
-            // The lenght of the cmsghdr we want to add
-            let next_len = cmsg.cmsg_len();
-            // Align the pointer of the to be added cmsghdr
-            let next_align = (next_len + mem::size_of::<usize>() - 1)
-                & !(mem::size_of::<usize>() - 1);
-            // End address of the aligned to be added cmsghdr
-            let next_end_aligned = next_start as usize + next_align;
-
-            assert!((next_end as usize) < buffer_end, 
-                "Next cmsghdr end must be before buffer end. Cmsghdr end was {}, buffer end was {}",
-                 next_end as usize, 
-                 buffer_end
-            );
-            assert!(next_end_aligned < buffer_end, 
-                "Next aligned cmsghdr end must be before buffer end. Cmsghdr end was {}, buffer end was {}", 
-                next_end_aligned, 
-                buffer_end
-            );
-
-            cmsg_hdr = next_len as *mut cmsghdr;
+            cmsg_hdr = next_start;
         }
 
         // Add assertion if calculated end pointer address == end address of Vec
