@@ -2370,9 +2370,15 @@ impl<'a> CmsgEncoder<'a> {
             // End address of the aligned to be added cmsghdr
             let next_end_aligned = next_start as usize + next_align;
 
-            assert!(
-                (next_end as usize) < buffer_end
-                    && next_end_aligned < buffer_end
+            assert!((next_end as usize) < buffer_end, 
+                "Next cmsghdr end must be before buffer end. Cmsghdr end was {}, buffer end was {}",
+                 next_end as usize, 
+                 buffer_end
+            );
+            assert!(next_end_aligned < buffer_end, 
+                "Next aligned cmsghdr end must be before buffer end. Cmsghdr end was {}, buffer end was {}", 
+                next_end_aligned, 
+                buffer_end
             );
 
             cmsg_hdr = next_len as *mut cmsghdr;
